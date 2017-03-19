@@ -1,0 +1,82 @@
+#
+# Author:: Chris Jones <chris.jones@lambdastack.io>
+# Cookbook Name:: cepheus
+#
+# Copyright 2017, LambdaStack
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# Recipe sets up basic network settings such as MTU
+# NOTE: If using VirtualBox then keep the mtu at 1500. There seems to be odd behavior on the cluster adapter if set to 9000.
+# This does not apply to real nics.
+
+# Sets mtu now for each interface but templates below make them perm.
+execute 'network-public' do
+  command lazy { "ip link set dev #{node['cepheus']['network']['public']['interface']} mtu #{node['cepheus']['network']['public']['mtu']}" }
+  not_if "ip link show dev #{node['cepheus']['network']['public']['interface']} | grep 'mtu #{node['cepheus']['network']['public']['mtu']}'"
+end
+
+execute 'network-cluster' do
+  command lazy { "ip link set dev #{node['cepheus']['network']['cluster']['interface']} mtu #{node['cepheus']['network']['cluster']['mtu']}" }
+  not_if "ip link show dev #{node['cepheus']['network']['cluster']['interface']} | grep 'mtu #{node['cepheus']['network']['cluster']['mtu']}'"
+end
+
+# Sets the route for the cluster interface but the template below makes it perm.
+if node['cepheus']['network']['cluster']['route']['cidr']
+  gateway = get_gateway("#{node['cepheus']['network']['cluster']['interface']}")
+  execute 'network-cluster-route' do
+    command lazy { "ip route add #{node['cepheus']['network']['cluster']['route']['cidr']} via #{gateway} dev #{node['cepheus']['network']['cluster']['interface']}" }
+    ignore_failure true
+    not_if "ip r s | grep '#{node['cepheus']['network']['cluster']['route']['cidr']} via #{gateway} dev #{node['cepheus']['network']['cluster']['interface']}'"
+  end
+end
+
+# Set primary interface (public)
+template "/etc/sysconfig/network-scripts/ifcfg-#{node['cepheus']['network']['public']['interface']}" do
+  source 'ifcfg-public-nic.erb'
+  variables lazy {
+    {
+      :ip_addr => get_ip("#{node['cepheus']['network']['public']['interface']}"),
+      :netmask => get_netmask("#{node['cepheus']['network']['public']['interface']}"),
+      :mac_address => get_mac_address("#{node['cepheus']['network']['public']['interface']}"),
+      :gateway => get_gateway("#{node['cepheus']['network']['public']['interface']}")
+    }
+  }
+end
+
+# Set the cluster nic gateway to null (remove it) for routed racks or ARP may have a race condition issue
+if node['cepheus']['network']['cluster']['gateway_enable'] == false
+  template "/etc/sysconfig/network-scripts/ifcfg-#{node['cepheus']['network']['cluster']['interface']}" do
+    source 'ifcfg-cluster-nic.erb'
+    variables lazy {
+      {
+        :ip_addr => get_ip("#{node['cepheus']['network']['cluster']['interface']}"),
+        :netmask => get_netmask("#{node['cepheus']['network']['cluster']['interface']}"),
+        :mac_address => get_mac_address("#{node['cepheus']['network']['cluster']['interface']}")
+      }
+    }
+  end
+
+  template "/etc/sysconfig/network-scripts/route-#{node['cepheus']['network']['cluster']['interface']}" do
+    source 'route-cluster.erb'
+    variables lazy {
+      {
+        :gateway => get_gateway("#{node['cepheus']['network']['cluster']['interface']}")
+      }
+    }
+  end
+end
+
+# NOTE: May want to add a recipe that configures the interfaces in non-bonding mode in the event something happens.
+# Cobbler creates the interfaces initially.

@@ -1,0 +1,93 @@
+################################################
+# Auto generated
+################################################
+
+global
+  daemon
+  user haproxy
+  group haproxy
+  pidfile /var/run/haproxy.pid
+  stats socket /var/run/haproxy/haproxy-user.asok mode 666 level user
+  log /dev/log local0 info
+  maxconn <%= node['cepheus']['adc']['connections']['max'] %>
+
+defaults
+  log global
+  mode http
+  option http-server-close
+  option abortonclose
+  option httplog
+  option dontlognull
+  option nolinger
+  option redispatch
+  retries 3
+  timeout http-request 5s
+  timeout queue 1m
+  timeout connect 5s
+  timeout check 10s
+  timeout client 30m
+  timeout server 30m
+
+<% if node['cepheus']['adc']['stats']['enable'] %>
+# Only want the real IP and not the VIPs
+listen stats <%= @server['network']['public']['ip'] %>:<%= node['cepheus']['adc']['stats']['port'] %>
+    stats enable
+    stats uri /
+    stats hide-version
+    stats auth <%= node['cepheus']['adc']['stats']['user'] %>:<%= node['cepheus']['adc']['stats']['passwd'] %>
+<% end -%>
+
+<% node['cepheus']['adc']['vips'].each do | vip | %>
+frontend radosgw-http-<%="#{vip['name']}"%>
+  bind <%="#{vip['ip']}:#{node['cepheus']['adc']['vip']['port']['non_ssl']}"%>
+  option httplog
+  <% if node['cepheus']['ceph']['pools']['radosgw']['federated']['enable'] %>
+  default_backend <%="#{vip['backend_label']}"%>-<%="#{vip['name']}"%>
+  <% else %>
+  default_backend <%="#{vip['backend_label']}"%>
+  <% end %>
+
+<% if vip['ssl'] %>
+frontend radosgw-https-<%="#{vip['name']}"%>
+  bind <%="#{vip['ip']}:#{node['cepheus']['adc']['vip']['port']['ssl']}"%> ssl crt <%="#{node['cepheus']['adc']['ssl']['path']}/#{vip['cert']}" %>
+  option httplog
+  <% if node['cepheus']['ceph']['pools']['radosgw']['federated']['enable'] %>
+  default_backend <%="#{vip['backend_label']}"%>-<%="#{vip['name']}"%>
+  <% else %>
+  default_backend <%="#{vip['backend_label']}"%>
+  <% end %>
+<% end %>
+
+<% end -%>
+
+# NOTE: For Federated RGW, each vip name represents an instance for RGW running on the node. For example, if there are
+# 3 VIPs and Federated is enabled then there will be 3 instances of RGW running.
+
+<% if node['cepheus']['ceph']['pools']['radosgw']['federated']['enable'] %>
+<% node['cepheus']['adc']['vips'].each do | vip | %>
+backend <%="#{vip['backend_label']}"%>-<%="#{vip['name']}"%>
+  balance <%= node['cepheus']['adc']['connections']['balance'] %>
+  http-request set-header X-Forwarded-Port %[dst_port]
+  option httpchk GET /
+  #option httpchk HEAD / HTTP/1.1\r\nHost:localhost
+  http-check expect status 200
+<% @backend_nodes.each do | backend_node | -%>
+  <% if  vip['name'] == backend_node['instance'] %>
+  <%= "server #{backend_node['name']} #{backend_node['ip']}:#{backend_node['port']} weight #{backend_node['weight']} #{backend_node['options']}" %>
+  <% end -%>
+<% end -%>
+
+<% end %>
+<% else %>
+<% node['cepheus']['adc']['vips'].each do | vip | %>
+backend <%="#{vip['backend_label']}"%>
+  balance <%= node['cepheus']['adc']['connections']['balance'] %>
+  http-request set-header X-Forwarded-Port %[dst_port]
+  option httpchk GET /
+  #option httpchk HEAD / HTTP/1.1\r\nHost:localhost
+  http-check expect status 200
+<% @backend_nodes.each do | backend_node | -%>
+  <%= "server #{backend_node['name']} #{backend_node['ip']}:#{backend_node['port']} weight #{backend_node['weight']} #{backend_node['options']}" %>
+<% end -%>
+<% end -%>
+<% end -%>

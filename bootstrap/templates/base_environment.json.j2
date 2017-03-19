@@ -1,0 +1,564 @@
+{
+  {#- NOTE: This template goes through a multi-phase process where the first pass pulls from one data file and  #}
+  {#- and the second from another data file. The yaml data is found in /bootstrap/seed_data #}
+  "name": "{{ node.environment_short }}",
+  "json_class": "Chef::Environment",
+  "description": "Data to build out {{ node.data_center }} Ceph Cluster",
+  "cookbook_versions": {},
+  "chef_type": "environment",
+  "override_attributes": {
+    "cepheus": {
+      "environment": "{{ node.environment_short }}",
+      "repo": {
+        {#- Pins the current version of ceph or any other packaged in the array at the moment of install. #}
+        "packages": [
+          {"name": "", "version": "", "pin": true}
+        ]
+      },
+      "cron": {
+        "logs": {
+          "ceph": {
+            "radosgw": {
+              "uid": "{{ cron.logs.ceph.radosgw.uid }}",
+              "name": "{{ cron.logs.ceph.radosgw.name }}",
+              "access_key": "{{ cron.logs.ceph.radosgw.access_key }}",
+              "secret_key": "{{ cron.logs.ceph.radosgw.secret_key }}",
+              "endpoint": "{{ cron.logs.ceph.radosgw.endpoint }}",
+              "port": {{ cron.logs.ceph.radosgw.port }},
+              "bucket": "{{ cron.logs.ceph.radosgw.bucket }}"
+            }
+          },
+          "patterns": [
+          {%- for item in cron.logs.patterns %}
+            {"directory": "{{ item.directory }}", "pattern": "{{ item.pattern }}", "bucket": {%- if item.bucket %}"{{ item.bucket }}"{% else %}"{{ cron.logs.ceph.radosgw.bucket }}"{%- endif %}}{%- if not loop.last %},{% endif %}
+          {%- endfor %}
+          ]
+        }
+      },
+      "bootstrap": {
+        "name": "{{ node.name }}",
+        "env": "{{ node.env }}",
+        "interfaces": [
+        {%- for item in interfaces %}
+          {"name": "{{ item.device }}", "ip": "{{ item.ip }}", "netmask": "{{ item.netmask }}", "gateway": "{{ item.gateway }}", "mac": "{{ item.mac }}"}{%- if not loop.last %},{% endif %}
+        {%- endfor %}
+        ]
+      },
+      "adc": {
+        "tag": "ceph-adc",
+        "interface": "{{ adc.interface }}",
+        "stats": {
+          "enable": {%- if adc.enable == True %} true, {% else %} false, {%- endif %}
+          "user": "{{ adc.haproxy.user }}",
+          "passwd": "{{ adc.haproxy.passwd }}",
+          "port": {{ adc.haproxy.port }}
+        },
+        "bond": {
+          "enable": {%- if bond.enable == True %} true, {% else %} false, {%- endif %}
+          "name": "{{ bond.name }}",
+          "type": "Bond",
+          "mtu": {{ bond.mtu }},
+          "interfaces": ["{{ bond.interfaces|join('","') }}"],
+          "options": "{{ bond.options }}",
+          "nm_controlled": "no"
+        },
+        "connections": {
+          "max": {{ adc.haproxy.max_connections }},
+          "balance": "{{ adc.haproxy.balance }}"
+        },
+        "ssl": {
+          "path": "/etc/ssl/private"
+        },
+        "vip": {
+          "prefix": "{{ vip.prefix }}",
+          "netmask": "{{ vip.netmask }}",
+          "cidr": {{ vip.cidr }},
+          "port": {
+            "ssl": 443,
+            "non_ssl": 80
+          }
+        },
+        {#- backend_port is used in the backend section below for Federated only. #}
+        "vips": [
+        {%- for item in vip.vips %}
+          {"name": "{{ item.name }}", "ip": "{{ item.ip }}", "cidr": {{ vip.cidr }}, "interface": "{{ item.interface }}", "backend_label": "{{ item.backend_label }}", "ssl": {%- if item.ssl == True %} true {% else %} false {%- endif %}, "cert": "{{ item.cert }}", "ssl_files": ["{{ item.ssl_files|join('","') }}"], "url": "{{ item.url }}"}{%- if not loop.last %},{% endif %}
+        {%- endfor %}
+        ],
+        {#- VIPS are 10.121.16.16/28 range (.17 - .30). Advertised via BGP or Static+BFD Beacon. #}
+        "bgp": {
+          "enable": {%- if adc.bgp.enable == True %} true, {% else %} false, {%- endif %}
+          "asn": {{ adc.bgp.asn }},
+          "interface": "{{ adc.bgp.interface }}",
+          "roles": [
+          {%- for item in adc.bgp.roles %}
+            {"name": "{{ item.name }}", "role": "{{ item.role }}"}{%- if not loop.last %},{% endif %}
+          {%- endfor %}
+          ],
+          "peers": [
+            {%- for item in adc.bgp.peers %}
+              {"name": "{{ item.name }}", "label": "{{ item.label }}", "ip": "{{ item.ip }}"}{%- if not loop.last %},{% endif %}
+            {%- endfor %}
+          ]
+        },
+        "backend": {
+          {#- NOTE: IF Federated then VIPs 'name' variable, Backend/Servers 'instance' variable and Ceph/Pools/Radosgw/Federated/Zone_Instances 'name' *MUST* be the same value for the lookups to work. #}
+          {#- IF Federated is NOT used then leave 'instance' variable name below empty. #}
+          "servers": [
+          {%- if ceph.radosgw.federated.enable %}
+          {%- for vip in vip.vips %}
+            {%- set rowloop = loop %}
+            {%- if vip.type == "rgw" %}
+              {%- for item in backend.servers %}
+                {"name": "{{ item.name }}", "instance": "{{ vip.name }}", "type": "{{ item.type }}", "weight": "{{ item.weight }}", "port": {{ vip.backend_port }}, "options": "{{ item.options }}"}{%- if not rowloop.last %},{% elif not loop.last %},{% endif %}
+              {%- endfor %}
+            {%- endif %}
+          {%- endfor %}
+          {%- else %}
+          {%- for item in backend.servers %}
+            {"name": "{{ item.name }}", "instance": "", "type": "{{ item.type }}", "weight": "{{ item.weight }}", "port": {{ item.port }}, "options": "{{ item.options }}"}{%- if not loop.last %},{% endif %}
+          {%- endfor %}
+          {%- endif %}
+          ]
+        }
+      },
+      "keepalived": {
+        "passwd": "{{ adc.keepalived.passwd }}",
+        "checks": true,
+        "servers": [
+        {%- for item in adc.keepalived.servers %}
+          {"name": "{{ item.name }}", "weight": "{{ item.weight }}", "interface": "{{ item.interface }}"}{%- if not loop.last %},{% endif %}
+        {%- endfor %}
+        ]
+      },
+      "chef": {
+        "owner": "{{ chef.owner }}",
+        "group": "{{ chef.group }}"
+      },
+      "security": {
+        "sshd": {
+          "permit_root_login": "no",
+          "login_grace_time": "2m",
+          "max_auth_tries": 6,
+          "max_sessions": 10,
+          "banner": "/etc/banner"
+        },
+        "firewall": {
+          "enable": {%- if security.firewall.enable == True %}true{% else %}false{%- endif %},
+          "zone": "{{ security.firewall.zone }}",
+          "use": "{{ security.firewall.use }}",
+          "rules": [
+          {%- for item in security.firewall.rules %}
+            {"name": "{{ item.name }}", "type": "{{ item.type }}", "zone": "{{ item.zone }}", "permanent": {%- if item.permanent == True %} true{% else %} false{%- endif %}, "roles": ["{{ item.roles|join('","') }}"], "rules": ["{{ item.rules|join('","') }}"]}{%- if not loop.last %},{% endif %}
+          {%- endfor %}
+          ],
+          "interfaces": [
+            {
+              "name": "public",
+              "ports": [
+                {"role": "ceph-bootstrap", "open": [{"port": 123, "protocol": "udp"}, {"port": 80, "protocol": "tcp"}, {"port": 443, "protocol": "tcp"}, {"port": 67, "protocol": "udp"}, {"port": 69, "protocol": "udp"}, {"port": 21, "protocol": "tcp"}, {"port": 4011, "protocol": "udp"}, {"port": 53, "protocol": "udp"}], "ranges": [{"start": 25150, "end": 25152, "protocol": "tcp"}]},
+                {"role": "ceph-mon", "open": [{"port": 6789, "protocol": "tcp"}], "ranges": [{"start": 0, "end": 0, "protocol": "tcp"}]},
+                {"role": "ceph-osd", "open": [], "ranges": [{"start": 6800, "end": 6872, "protocol": "tcp"}]},
+                {"role": "ceph-rgw", "open": [8080], "ranges": [{"start": 0, "end": 0, "protocol": "tcp"}]},
+                {"role": "ceph-restapi", "open": [{"port": 5080, "protocol": "tcp"}], "ranges": [{"start": 0, "end": 0, "protocol": "tcp"}]},
+                {"role": "ceph-admin", "open": [], "ranges": [{"start": 0, "end": 0, "protocol": "tcp"}]},
+                {"role": "ceph-mds", "open": [], "ranges": [{"start": 6800, "end": 6872, "protocol": "tcp"}]},
+                {"role": "ceph-rbd", "open": [], "ranges": [{"start": 0, "end": 0, "protocol": "tcp"}]},
+                {"role": "haproxy", "open": [{"port": 80, "protocol": "tcp"}, {"port": 443, "protocol": "tcp"},{"port": 1936, "protocol": "tcp"}], "ranges": [{"start": 0, "end": 0, "protocol": "tcp"}]},
+                {"role": "keepalived", "open": [{"port": 112, "protocol": "tcp"}], "ranges": [{"start": 0, "end": 0, "protocol": "tcp"}]}
+              ]
+            },
+            {
+              "name": "cluster",
+              "ports": [
+                {"role": "ceph-osd", "open": [], "ranges": [{"start": 6800, "end": 6872, "protocol": "tcp"}]}
+              ]
+            }
+          ]
+        }
+        {#- "NOTE1": "NOTE: Firewall open ports are accumulative for each node based on it's role. Role must match ceph-chef tags.", #}
+        {#- "NOTE2": "NOTE: Range start = 0 then range is skipped else put in exact ranges.", #}
+        {#- "NOTE3": "NOTE: OSDs start at 6800 and each OSD uses at least 3 ports. The end number should be high enough to account for this. MDS should match OSD.", #}
+        {#- "NOTE4": "NOTE: If you run multiple instances of RGW then keep the port count in mind." #}
+      },
+      "system": {
+        "sysctl": [
+          "kernel.pid_max=4194303",
+          "fs.file-max=26234859",
+          "vm.swappiness=0"
+        ]
+      },
+      "ipmi": {
+        "user": "{{ ipmi.user }}",
+        "passwd": "{{ ipmi.passwd }}"
+        {#- "NOTE": "password of vbox is: $6$Salt$xvQkYaQ4urNWmnjpinAZSR/ZOaRy/aacKh4j18ayq/.mswLqleFZI5zaD1BCg2Fdzy1BjpBv9VIgVgt6YoA8T0" #}
+      },
+      "cobbler": {
+        "web_user": "cobbler",
+        "pxe_interface": "{{ cobbler.interface }}",
+        "server": "{{ cobbler.server }}",
+        "kickstart": {
+          "root": {
+            "passwd": "{{ cobbler.kickstart.root.passwd }}",
+            "passwd_type": "--iscrypted",
+            "key": "{{ cobbler.kickstart.root.key }}"
+          },
+          "file": {
+            "osd": "cepheus_node_rhel_osd.ks",
+            "nonosd": "cepheus_node_rhel_nonosd.ks"
+          },
+          "bootloader": {
+            "passwd": "{{ cobbler.kickstart.bootloader.passwd }}",
+            "passwd_type": "{{ cobbler.kickstart.bootloader.passwd_type }}"
+          },
+          "users": [
+            {
+              "name": "{{ user.name }}",
+              "passwd": "{{ user.passwd }}",
+              "passwd_type": "--iscrypted",
+              "key": "{{ user.key }}",
+              "shell": "/bin/bash",
+              "comment": "{{ user.comment }}",
+              "groups": "{{ user.group }}",
+              "sudo": true
+            }
+          ]
+        },
+        "profiles": [
+          {"name": "ceph_osd_node", "file_type": "osd", "comment": "OSD type nodes either dedicated OSD or converged with other services like MON and RGW."},
+          {"name": "ceph_non_osd_node", "file_type": "nonosd", "comment": "NON-OSD type nodes. Services like MON, RGW or MDS."}
+        ],
+        "servers": [
+          {%- raw %}
+          {%- for item in rack_01.nodes %}
+            {"name": "{{ item.name }}", "roles": [{%- for role in item.roles %}"{{role}}"{%- if not loop.last %},{% endif %}{%- endfor %}], "profile": "{{ item.profile }}", "network": {"public": {"interface": "{{ item.public.device }}", "mac": "{{ item.public.mac }}", "ip": "{{ rack_01.interfaces.public.ip_prefix  }}{{ item.public.ip }}", "netmask": "{{ rack_01.netmask }}", "gateway": "{{ rack_01.interfaces.public.gateway }}", "mtu": {{ rack_01.interfaces.public.mtu }}}, "cluster": {"interface": "{{ item.cluster.device }}", "mac": "{{ item.cluster.mac }}", "ip": "{{ rack_01.interfaces.cluster.ip_prefix  }}{{ item.cluster.ip }}", "netmask": "{{ rack_01.netmask }}", "gateway": "{{ rack_01.interfaces.cluster.gateway }}", "mtu": {{ rack_01.interfaces.cluster.mtu }}}}},
+          {%- endfor %}
+          {%- for item in rack_02.nodes %}
+            {"name": "{{ item.name }}", "roles": [{%- for role in item.roles %}"{{role}}"{%- if not loop.last %},{% endif %}{%- endfor %}], "profile": "{{ item.profile }}", "network": {"public": {"interface": "{{ item.public.device }}", "mac": "{{ item.public.mac }}", "ip": "{{ rack_02.interfaces.public.ip_prefix  }}{{ item.public.ip }}", "netmask": "{{ rack_02.netmask }}", "gateway": "{{ rack_02.interfaces.public.gateway }}", "mtu": {{ rack_02.interfaces.public.mtu }}}, "cluster": {"interface": "{{ item.cluster.device }}", "mac": "{{ item.cluster.mac }}", "ip": "{{ rack_02.interfaces.cluster.ip_prefix  }}{{ item.cluster.ip }}", "netmask": "{{ rack_02.netmask }}", "gateway": "{{ rack_02.interfaces.cluster.gateway }}", "mtu": {{ rack_02.interfaces.cluster.mtu }}}}},
+          {%- endfor %}
+          {%- for item in rack_03.nodes %}
+            {"name": "{{ item.name }}", "roles": [{%- for role in item.roles %}"{{role}}"{%- if not loop.last %},{% endif %}{%- endfor %}], "profile": "{{ item.profile }}", "network": {"public": {"interface": "{{ item.public.device }}", "mac": "{{ item.public.mac }}", "ip": "{{ rack_03.interfaces.public.ip_prefix  }}{{ item.public.ip }}", "netmask": "{{ rack_02.netmask }}", "gateway": "{{ rack_03.interfaces.public.gateway }}", "mtu": {{ rack_03.interfaces.public.mtu }}}, "cluster": {"interface": "{{ item.cluster.device }}", "mac": "{{ item.cluster.mac }}", "ip": "{{ rack_03.interfaces.cluster.ip_prefix  }}{{ item.cluster.ip }}", "netmask": "{{ rack_03.netmask }}", "gateway": "{{ rack_03.interfaces.cluster.gateway }}", "mtu": {{ rack_03.interfaces.cluster.mtu }}}}}{%- if not loop.last %},{% endif %}
+          {%- endfor %}
+          {%- endraw %}
+        ],
+        "dhcp": {
+          "shared_network": "cepheus",
+          "single": {
+            "netmask": "{{ cobbler.kickstart.dhcp.single.netmask }}",
+            "gateway": "{{ cobbler.kickstart.dhcp.single.gateway }}"
+          },
+          "subnets":[
+          {%- for item in cobbler.kickstart.dhcp.subnets %}
+            {"subnet": "{{ item.subnet }}", "tag": "{{ item.tag }}", "dhcp_range": ["{{ item.dhcp_range|join('","') }}"], "netmask": "{{ item.netmask }}", "router": "{{ item.router }}"}{%- if not loop.last %},{% endif %}
+          {%- endfor %}
+          ]
+         },
+        {#- "NOTE1": "NOTE: Each subnet represents a routable rack so dhcp will need to manage each subnet with the TOR using IP-helper for dhcp requests by nodes in the given rack.", #}
+        {#- "NOTE2": "NOTE: You could just have one subnet for a single L2 span set of racks.", #}
+        {#- "NOTE3": "NOTE: /27 for subnet mask of each rack. DNS could be added to each subnet entry above but the global DNS entry below is good enough for this.", #}
+        "raid": false,
+        "partition_option": "ignoredisk --drives=sda,sdb,sdc,sdd,sde,sdf,sdg,sdh,sdi,sdj,sdk,sdl,sdn",
+        "partitions": [
+          {"part": "/boot", "fstype": "xfs", "size": 1024, "options": "--ondisk=sdm"},
+          {"part": "/", "fstype": "xfs", "size": 150000, "options": "--ondisk=sdm"},
+          {"part": "/var/lib", "fstype": "xfs", "size": 40000, "options": "--ondisk=sdm"},
+          {"part": "/opt", "fstype": "xfs", "size": 20000, "options": "--ondisk=sdm"},
+          {"part": "swap", "fstype": "swap", "size": 20000, "options": "--ondisk=sdm"}
+        ],
+        {#- Came back and added RAID1 to the OSD SSDs because of issues in supermicro servers. These journals and OS share SSDs because of design limitations. #}
+        "raid_partitions": [
+          {"raid": "part raid.01 --size=1024  --ondisk=sdm"},
+          {"raid": "part raid.02 --size=150000 --ondisk=sdm"},
+          {"raid": "part raid.03 --size=40000 --ondisk=sdm"},
+          {"raid": "part raid.04 --size=20000 --ondisk=sdm"},
+          {"raid": "part raid.05 --size=20000 --ondisk=sdm"},
+          {"raid": "part raid.06 --size=1024  --ondisk=sdn"},
+          {"raid": "part raid.07 --size=150000 --ondisk=sdn"},
+          {"raid": "part raid.08 --size=40000 --ondisk=sdn"},
+          {"raid": "part raid.09 --size=20000 --ondisk=sdn"},
+          {"raid": "part raid.10 --size=20000 --ondisk=sdn"},
+          {"raid": "raid /boot      --level=RAID1 --device=md0 --fstype=xfs  raid.01 raid.06"},
+          {"raid": "raid /          --level=RAID1 --device=md1 --fstype=xfs  raid.02 raid.07"},
+          {"raid": "raid /var/lib   --level=RAID1 --device=md2 --fstype=xfs  raid.03 raid.08"},
+          {"raid": "raid /opt       --level=RAID1 --device=md3 --fstype=xfs  raid.04 raid.09"},
+          {"raid": "raid swap       --level=RAID1 --device=md4 --fstype=swap raid.05 raid.10"}
+        ],
+        {#- "NOTE4": "NOTE: Partitions are for OSD nodes. All other partitions are coded into the given ks file.", #}
+        "ports": {
+          "http": 80,
+          "https": 443,
+          "xmlrpc": 25151
+        },
+        "os": {
+          "name": "{{ cobbler.kickstart.os.name }}",
+          "version": "{{ cobbler.kickstart.os.version }}",
+          "arch": "{{ cobbler.kickstart.os.arch }}",
+          "distro": "{{ cobbler.kickstart.os.distro }}",
+          "breed": "{{ cobbler.kickstart.os.breed }}"
+        },
+        "redhat": {
+          "management": {
+            "type": {%- if cobbler.kickstart.redhat.management.type == True %} true, {% else %} false, {%- endif %}
+            "server": "{{ cobbler.kickstart.redhat.management.server }}",
+            "key": "{{ cobbler.kickstart.redhat.management.key }}"
+          }
+        },
+        "repo_mirror": false
+      },
+      "ceph": {
+        "cluster": "ceph",
+        "repo": {
+          "create": false,
+          "version": {
+            "name": "hammer",
+            "branch": "stable",
+            "revision": "0.el7",
+            "number": "0.94.7",
+            "arch": "x86_64"
+          }
+        },
+        "mgr": {
+          "enable": {%- if ceph.mgr.enable == True %} true {% else %} false {%- endif %}
+        },
+        "config": {
+          {#- "NOTE": "This section is pure key/value. Meaning, the key and value are added to the given location in ceph.conf.", #}
+          "global": {
+            "rgw override bucket index max shards": {{ ceph.radosgw.bucket_shards }}
+          },
+          "mon": {
+            {#- 'mon allow pool delete' = false *AFTER* the cluster is stable. Keeps someone from deleting pools :) #}
+            "mon osd full ratio": 0.95,
+            "mon osd nearfull ratio": 0.85,
+            "mon pg warn max per osd": 0,
+            "mon pg warn max object skew": 10,
+            "mon osd min down reporters": 3,
+            "mon osd down out interval": 600,
+            "clock drift allowed": 0.15
+          },
+          "radosgw": {
+            "cache max file size": 20000000
+          }
+        },
+        "mon": {
+          "port": 6789,
+          "niceness": -10,
+          "bond": {
+            "enable": {%- if bond.enable == True %} true, {% else %} false, {%- endif %}
+            "name": "{{ bond.name }}",
+            "type": "Bond",
+            "mtu": {{ bond.mtu }},
+            "interfaces": ["{{ bond.interfaces|join('","') }}"],
+            "options": "{{ bond.options }}",
+            "nm_controlled": "no"
+          }
+        },
+        "radosgw": {
+          "port": 8080,
+          "default_url": "{{ ceph.radosgw.default_url }}",
+          "debug": {
+            "logs": {
+              "level": {{ ceph.radosgw.debug.logs.level }},
+              "enable": {%- if ceph.radosgw.debug.logs.enable == True %} true {% else %} false {%- endif %}
+            }
+          },
+          "logs": {
+            "ops": {%- if ceph.radosgw.logs.ops.enable == True %} true, {% else %} false, {%- endif %}
+            "usage": {%- if ceph.radosgw.logs.usage.enable == True %} true {% else %} false {%- endif %}
+          },
+          "users": [
+            {%- for user in ceph.radosgw.users %}
+              {"uid": "{{ user.uid }}", "name": "{{ user.name }}", "email": "{{ user.email }}", "admin_caps": "{{ user.admin_caps }}", "access_key": "{{ user.access_key }}", "secret_key": "{{ user.secret_key }}", "max_buckets": {{ user.max_buckets }}, "status": "{{ user.status }}", "key_type": "{{ user.key_type }}", "quota": {"user": { "status": "{{ user.quota.user.status }}", "size": {{ user.quota.user.size }}, "objects": {{ user.quota.user.objects }} }, "buckets": [{%- for bucket in user.quota.buckets %}{"name": "{{ bucket.name }}", "status": "{{ bucket.status }}", "size": {{ bucket.size }}, "objects": {{ bucket.objects }}}{%- if not loop.last %},{% endif %}{%- endfor %}]}, "zones": ["{{ user.zones|join('","') }}"], "buckets": ["{{ user.buckets|join('","') }}"] }{%- if not loop.last %},{% endif %}
+            {%- endfor %}
+          ],
+          "keystone": {
+            "auth": false,
+            "admin": {
+              "token": "",
+              "url": "",
+              "port": 35357
+            },
+            "accepted_roles": "admin Member _member_",
+            "token_cache_size": 1000,
+            "revocation_interval": 1200
+          },
+          "rgw_num_rados_handles": {{ ceph.radosgw.rados_handles }},
+          "civetweb_num_threads": {{ ceph.radosgw.civetweb_threads }},
+          "bond": {
+            "enable": {%- if bond.enable == True %} true, {% else %} false, {%- endif %}
+            "name": "{{ bond.name }}",
+            "type": "Bond",
+            "mtu": {{ bond.mtu }},
+            "interfaces": ["{{ bond.interfaces|join('","') }}"],
+            "options": "{{ bond.options }}",
+            "nm_controlled": "no"
+          }
+        },
+        "osd": {
+          {#- Move this data to the seed yamls if we need to make them more dynamic for different clusters. #}
+          "devices": [
+            { "data": "/dev/sda", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sdb", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sdc", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sdd", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sde", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sdf", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sdg", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sdh", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sdi", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sdj", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sdk", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false},
+            { "data": "/dev/sdl", "data_type": "hdd", "journal": "/dev/sdn", "journal_type": "ssd", "encrypted": false}
+          ],
+          "crush": {
+            "update": true,
+            "update_on_start": false,
+            "chooseleaf_type": 1
+          },
+          {#- The add and remove should reflect the same structure as devices above and should be used for maintenance only! #}
+          "add": [],
+          "remove": [],
+          "niceness": -10,
+          "encrypted": false,
+          "rebalance": false,
+          "size": {
+            "max": 3,
+            "min": 2
+          },
+          "journal": {
+            {#- Change the journal size for the prod SSD #}
+            {#- Calculate min size (if you have space then use it): 2 * (#OSDs in node * 100MB/s) * 5 (default sync interval) = 2 * (12 * 100) * 5 = 12GB #}
+            "size": 20000
+          }
+        },
+        "pools": {
+          "active": ["radosgw"],
+          "crush": {
+            "rule": {{ ceph.pools.crush_rule }}
+          },
+          "erasure_coding": {
+            "profiles": [
+              {"profile": "{{ ceph.ec.profile }}", "directory": "{{ ceph.ec.directory }}", "plugin": "{{ ceph.ec.plugin }}", "force": true, "technique": "{{ ceph.ec.technique }}", "ruleset_root": "{{ ceph.ec.ruleset_root }}", "ruleset_failure_domain": "{{ ceph.ec.ruleset_failure_domain }}", "key_value": {"k": {{ ceph.ec.k }}, "m": {{ ceph.ec.m }}}}
+            ]
+          },
+          "radosgw": {
+            "federated": {
+              "enable": true,
+              "multisite_replication": false,
+              {#- Instances represent network tiers #}
+              {#- Instance name MUST match VIPs name and Backend/Server instance variables. IF Federation is not used then Backend/Server instance variable should be empty. #}
+              "zone_instances": [
+                {%- for item in vip.vips %}
+                  {%- if item.type == "rgw" %}
+                  {"name": "{{ item.name }}", "port": "{{ item.backend_port }}", "region": "{{ item.region }}", "url": "{{ item.url }}", "rgw_thread_pool": {{ item.rgw_thread_pool }}, "handles": {{ item.handles }}, "threads": {{ item.threads }}}{%- if not loop.last %},{% endif %}
+                  {%- endif %}
+                {%- endfor %}
+              ],
+              "regions": ["{{ ceph.radosgw.federated.regions|join('", "') }}"],
+              "enable_regions_zones": true,
+              "master_zone": "{{ ceph.radosgw.federated.master_zone }}",
+              "master_zone_port": "{{ ceph.radosgw.federated.master_zone_port }}"
+            },
+            {#- The data_percent below should equal 100%. If Federated then the calculation will take those pools into account. #}
+            {#- NOTE: IMPORTANT - ONLY 'buckets' (data) can be erasure coded. Others need to be replicated. #}
+            "pools": [
+              {"name": ".log", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".intent-log", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".rgw", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".rgw.control", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".rgw.gc", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".rgw.root", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".rgw.buckets", "data_percent": 95.90, "type": "erasure", "profile": "cepheus", "crush_ruleset": 1, "crush_ruleset_name": "hdd", "actions": [{"action": "create", "pg_num": 128, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".rgw.buckets.index", "data_percent": 2, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".rgw.buckets.extra", "data_percent": 1, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".users", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".users.uid", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".users.email", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".users.swift", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]},
+              {"name": ".usage", "data_percent": 0.10, "type": "replicated", "profile": "", "crush_ruleset": 0, "crush_ruleset_name": "hdd_replicated", "actions": [{"action": "create", "pg_num": 32, "type": "erasure", "profile": "cepheus"}, {"action": "set", "key": "fast_read", "value": 1}]}
+            ],
+            {#- If federated then the settings below apply to the federated pools else the non-federated pools. #}
+            "settings": {
+              "pg_num": {{ ceph.radosgw.settings.pg_num }},
+              "pgp_num": {{ ceph.radosgw.settings.pgp_num }},
+              "options": "",
+              "force": false,
+              "calc": true,
+              "size": {{ ceph.radosgw.settings.size }},
+              "crush_ruleset": {{ ceph.radosgw.settings.crush_ruleset }},
+              "chooseleaf": "{{ ceph.radosgw.settings.chooseleaf }}",
+              "chooseleaf_type": {{ ceph.radosgw.settings.chooseleaf_type }},
+              "type": "{{ ceph.radosgw.settings.type }}",
+              "nodes_per_rack": {{ ceph.radosgw.settings.nodes_per_rack }}
+            },
+            "remove": {
+              "names": []
+            }
+          },
+          "pgs": {
+            "calc": {
+              "total_osds": {{ ceph.pgs.calc.total_osds }},
+              "target_pgs_per_osd": {{ ceph.pgs.calc.target_pgs_per_osd }},
+              "min_pgs_per_pool": {{ ceph.pgs.calc.min_pgs_per_pool }},
+              "replicated_size": {{ ceph.pgs.calc.replicated_size }},
+              "erasure_size": {{ ceph.pgs.calc.erasure_size }}
+            },
+            "num": {{ ceph.pgs.num }}
+          }
+        },
+        "restapi": {
+          "url": "{{ ceph.restapi.url }}",
+          "ip": "{{ ceph.restapi.ip }}",
+          "port": {{ ceph.restapi.port }}
+        }
+      },
+      "domain_name" : "{{ node.domain }}",
+      "network": {
+        "public": {
+          "interface": "{{ network.public.interface }}",
+          "cidr": [
+            "{{ network.public.cidr|join('", "') }}"
+          ],
+          "mtu": {{ network.public.mtu }}
+        },
+        "cluster": {
+          "interface": "{{ network.cluster.interface }}",
+          "gateway_enable": false,
+          "cidr": [
+            "{{ network.cluster.cidr|join('", "') }}"
+          ],
+          "route": {
+            "cidr": "{{ network.cluster.route.cidr }}"
+          },
+          "mtu": {{ network.cluster.mtu }}
+        }
+      },
+      "dns": {
+        "servers": ["{{ nameservers|join('", "') }}"]
+      },
+      "ntp": {
+        "servers": ["{{ ntp|join('", "') }}"]
+      },
+      "collectd-plugins": {
+        "write_graphite": {
+          "node": {
+            "id": "{{ monitoring.collectd.id }}",
+            "host": "{{ monitoring.collectd.ip }}",
+            "port": {{ monitoring.collectd.port }},
+            "prefix": "{{ monitoring.collectd.prefix }}"
+          }
+        }
+      },
+      "zabbix": {
+        "repository": "http://repo.zabbix.com/zabbix/2.4/rhel/7/x86_64/",
+        "repository_key": "file:///etc/pki/rpm-gpg/RPM-GPG-KEY-ZABBIX",
+        "server": "{{ monitoring.zabbix.server }}"
+      }
+    },
+    "chef_client": {
+      "server_url": "{{ chef.server }}",
+      "cache_path": "/var/chef/cache",
+      "backup_path": "/var/chef/backup",
+      "validation_client_name": "cepheus-validator",
+      "run_path": "/var/chef"
+    }
+  }
+}

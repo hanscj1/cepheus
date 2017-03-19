@@ -1,0 +1,39 @@
+/bootstrap/data/environment/
+/bootstrap/vms/environment_config.yaml
+/bootstrap/vms/build_environment_config.yaml
+environment_config.yaml
+build_environment_config.yaml
+~$*
+.DS_Store
+ceph-chef/
+.idea/
+.iml/
+.chef/
+.vagrant
+Berksfile.lock
+*~
+*#
+.#*
+\#*#
+.*.sw[a-z]
+*.un~
+
+# Bundler
+Gemfile.lock
+bin/*
+.bundle/*
+
+.kitchen/
+.kitchen.local.yml
+*.env
+
+*.old
+
+# Don't save any iso images
+*.iso
+
+# SSH key pair - regenerated on each build
+bootstrap/vms/cepheus
+bootstrap/vms/cepheus.pub
+certs/*.pem
+certs/*.crt

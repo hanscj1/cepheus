@@ -1,0 +1,11 @@
+{
+  "name": "ceph-osd-pools",
+  "json_class": "Chef::Role",
+  "description": "Ceph create osd pools",
+  "run_list": [
+    "recipe[cepheus::pools-erasure-coding]",
+    "recipe[ceph-chef::pools_create]",
+    "recipe[ceph-chef::pools_set]",
+    "recipe[cepheus::pools]"
+  ]
+}

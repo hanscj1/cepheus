@@ -1,0 +1,4 @@
+chef_server_url "https://<%= node['cepheus']['bootstrap']['name'] %>/organizations/cepheus"
+log_location '/var/log/chef/client.log'
+validation_client_name "cepheus-validator"
+verify_api_cert true

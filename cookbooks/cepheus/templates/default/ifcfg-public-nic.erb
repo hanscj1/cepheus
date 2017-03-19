@@ -1,0 +1,12 @@
+BOOTPROTO=none
+DEVICE=<%= node['cepheus']['network']['public']['interface'] %>
+#HWADDR=<%= @mac_address %>
+TYPE=Ethernet
+ONBOOT=yes
+USERCTL=no
+MTU=<%= node['cepheus']['network']['public']['mtu'] %>
+IPADDR=<%= @ip_addr %>
+NETMASK=<%= @netmask %>
+GATEWAY=<%= @gateway %>
+DNS1=<%= node['cepheus']['dns']['servers'][0] %>
+DNS2=<%= node['cepheus']['dns']['servers'][1] %>

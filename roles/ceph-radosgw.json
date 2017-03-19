@@ -1,0 +1,17 @@
+{
+  "name": "ceph-radosgw",
+  "json_class": "Chef::Role",
+  "description": "Ceph RADOS Gateway",
+  "run_list": [
+    "role[common]",
+    "recipe[cepheus::ceph-conf]",
+    "recipe[cepheus::repo]",
+    "recipe[ceph-chef]",
+    "recipe[ceph-chef::repo]",
+    "recipe[cepheus::ceph-radosgw]",
+    "recipe[ceph-chef::radosgw]",
+    "recipe[ceph-chef::radosgw_start]",
+    "recipe[cepheus::ceph-scripts]",
+    "role[monitoring]"
+  ]
+}

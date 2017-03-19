@@ -1,0 +1,13 @@
+DEVICE=<%= @bond_name %>
+TYPE=Bond
+IPADDR=<%= @ip_addr %>
+NETMASK=<%= @net_mask %>
+GATEWAY=<%= @gateway %>
+DNS1=<%= node['cepheus']['dns']['servers'][0] %>
+DNS2=<%= node['cepheus']['dns']['servers'][1] %>
+MTU=<%= @mtu %>
+ONBOOT=yes
+BOOTPROTO=none
+BONDING_MASTER=yes
+BONDING_OPTS="<%= @bond_options %>"
+USERCTL=no

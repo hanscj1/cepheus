@@ -1,0 +1,10 @@
+{
+  "name": "ceph-mon-start",
+  "json_class": "Chef::Role",
+  "description": "Ceph Start mon Role",
+  "run_list": [
+      "recipe[cepheus::ceph-conf]",
+      "recipe[ceph-chef]",
+      "recipe[ceph-chef::mon_start]"
+  ]
+}

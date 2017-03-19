@@ -1,0 +1,26 @@
+##########################
+# Managed by Chef - Please do not modify directly.
+##########################
+# Cobbler generated configuration file for dnsmasq
+# $date
+#
+
+# disable lookup via resolve.conf
+no-poll
+no-resolv
+
+#enable-dbus
+read-ethers
+addn-hosts = /var/lib/cobbler/cobbler_hosts
+#domain=<%= node['cepheus']['domain_name'] %>
+listen-address=<%= node['cepheus']['cobbler']['server'] %>
+interface=<%= node['cepheus']['cobbler']['pxe_interface'] %>
+dhcp-range=<%= @range %>,<%= node['cepheus']['cobbler']['dhcp']['single']['netmask'] %>
+dhcp-option=3,$next_server
+dhcp-lease-max=1000
+dhcp-authoritative
+dhcp-boot=pxelinux.0
+dhcp-boot=net:normalarch,pxelinux.0
+dhcp-boot=net:ia64,$elilo
+
+$insert_cobbler_system_definitions
